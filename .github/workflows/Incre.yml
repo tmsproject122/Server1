@@ -68,24 +68,42 @@ jobs:
         sleep 8
         sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=root@incre || echo "Tailscale already up"
         
-    - name: Start tmate session
-      uses: mxschmitt/action-tmate@v3
-      
+    - name: Start tmate session in background
+      run: |
+        # Start tmate in the background and capture connection info
+        tmate -S /tmp/tmate.sock new-session -d
+        tmate -S /tmp/tmate.sock wait tmate-ready
+        tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' > /tmp/tmate_ssh
+        tmate -S /tmp/tmate.sock display -p '#{tmate_web}' > /tmp/tmate_web
+        
+        # Display connection info
+        echo "🔗 tmate SSH: $(cat /tmp/tmate_ssh)"
+        echo "🌐 tmate Web: $(cat /tmp/tmate_web)"
+        
+        # Keep tmate running in background
+        sleep 10 &
+        
     - name: Show Tailscale IP and tmate info
       run: |
         echo "🔗 Tailscale IP:"
         tailscale ip -4 || echo "Tailscale IP not found"
         echo ""
         echo "🔑 tmate SSH session:"
-        cat $HOME/.tmate.sock/ssh
+        cat /tmp/tmate_ssh || echo "tmate SSH info not available"
+        echo ""
+        echo "🌐 tmate Web session:"
+        cat /tmp/tmate_web || echo "tmate Web info not available"
         
-    - name: Sleep to keep VPS alive
-      run: sleep 21600
-      
+    - name: Sleep to keep VPS alive (background)
+      run: |
+        # Sleep in background to allow other steps to run
+        sleep 21600 &
+        
     - name: Backup VPS data and tailscale state
       run: |
+        echo "Creating backup..."
         sudo mkdir -p /opt/vps-backup/data
-        sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/
+        sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ 2>/dev/null || echo "No tailscale state found"
         sudo chown -R $USER:$USER /opt/vps-backup
         zip -r backup.zip /opt/vps-backup
         
@@ -94,6 +112,15 @@ jobs:
       with:
         name: vps-backup
         path: backup.zip
+        
+    - name: Keep workflow running
+      run: |
+        echo "VPS is running with tmate session in background"
+        echo "Workflow will continue to execute other steps"
+        echo "Use the tmate connection info above to access your VPS"
+        
+        # Wait for background processes (tmate and sleep)
+        wait
 
 # Username = incre
 # Pass = Incre.com
