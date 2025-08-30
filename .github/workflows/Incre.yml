@@ -16,13 +16,13 @@ jobs:
       
     - name: Display startup info
       run: |
-        echo "Creating hostname root@incre"
+        echo "Creating hostname incre-vps"
         echo "Creating username incre and pass Incre.com"
         
     - name: Set hostname
       run: |
-        sudo hostnamectl set-hostname root@incre
-        echo "127.0.0.1 root@incre" | sudo tee -a /etc/hosts
+        sudo hostnamectl set-hostname incre-vps
+        echo "127.0.0.1 incre-vps" | sudo tee -a /etc/hosts
         
     - name: Set root password
       run: |
@@ -40,10 +40,15 @@ jobs:
     - name: Install prerequisites
       run: |
         sudo apt update
-        sudo apt install -y tmux curl unzip sudo net-tools neofetch openssh-server
+        sudo apt install -y tmate curl unzip sudo net-tools neofetch
         
-    - name: Install Tailscale
+    - name: Clean up existing Tailscale and install fresh
       run: |
+        # Kill any existing tailscale processes
+        sudo pkill -f tailscaled || true
+        sudo rm -f /var/run/tailscale/tailscaled.sock 2>/dev/null || true
+        
+        # Install Tailscale fresh
         curl -fsSL https://tailscale.com/install.sh | sh
         
     - name: Restore backup files
@@ -62,34 +67,23 @@ jobs:
           sudo chmod 600 /var/lib/tailscale/tailscaled.state
         fi
         
-    - name: Start Tailscale
+    - name: Start Tailscale properly
       run: |
-        sudo tailscaled &
-        sleep 8
-        sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=root@incre || echo "Tailscale already up"
+        # Start tailscaled with clean state
+        sudo tailscaled --state=/var/lib/tailscale/tailscaled.state > /tmp/tailscaled.log 2>&1 &
+        sleep 10
         
-    - name: Setup SSH access
-      run: |
-        # Install and configure SSH server
-        sudo apt install -y openssh-server
-        sudo systemctl start ssh
-        sudo systemctl enable ssh
+        # Bring up Tailscale with proper hostname
+        sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=incre-vps --accept-routes
         
-        # Get public IP (for information)
-        PUBLIC_IP=$(curl -s ifconfig.me || echo "unknown")
-        echo "Public IP: $PUBLIC_IP"
+        echo "✅ Tailscale started successfully"
+        echo "Tailscale IP: $(tailscale ip -4 2>/dev/null || echo 'getting IP...')"
         
-    - name: Create persistent tmux session
-      run: |
-        # Create a named tmux session that persists
-        tmux new-session -d -s vps-session -c /home/incre
-        tmux send-keys -t vps-session "echo 'VPS Session Started - $(date)'" Enter
-        tmux send-keys -t vps-session "echo 'Tailscale IP:'" Enter
-        tmux send-keys -t vps-session "tailscale ip -4" Enter
-        tmux send-keys -t vps-session "echo ''" Enter
-        tmux send-keys -t vps-session "echo 'Use: tmux attach -t vps-session' to connect'" Enter
-        
-        echo "✅ tmux session created: vps-session"
+    - name: Start tmate session
+      id: tmate
+      uses: mxschmitt/action-tmate@v3
+      with:
+        timeout: 21000  # 350 minutes
         
     - name: Show connection information
       run: |
@@ -97,35 +91,31 @@ jobs:
         echo "🚀 VPS READY FOR CONNECTIONS"
         echo "=============================================="
         echo ""
-        echo "🔗 Tailscale IP (for direct access):"
-        tailscale ip -4 || echo "Tailscale IP not found"
+        echo "🔗 Tailscale IP:"
+        tailscale ip -4 || echo "Tailscale IP not available yet"
         echo ""
-        echo "💻 Connect via Tailscale:"
-        echo "  ssh incre@$(tailscale ip -4)"
+        echo "🔑 tmate SSH session:"
+        echo "ssh $(cat $HOME/.tmate.sock/ssh 2>/dev/null | head -1 || echo 'tmate session starting...')"
         echo ""
-        echo "📋 To access the tmux session:"
-        echo "  tmux attach -t vps-session"
+        echo "🌐 tmate Web session:"
+        echo "https://tmate.io/t/$(cat $HOME/.tmate.sock/ssh 2>/dev/null | cut -d'@' -f1 || echo 'tmate session starting...')"
         echo ""
-        echo "🔧 VPS will auto-reconnect every 6 hours"
+        echo "💻 Direct Tailscale SSH:"
+        echo "ssh incre@$(tailscale ip -4 2>/dev/null || echo 'waiting-for-ip')"
+        echo "Password: Incre.com"
         echo "=============================================="
         
-    - name: Setup auto-reconnect and monitoring
+    - name: Keep VPS alive
       run: |
-        # Create monitoring script
-        cat > /tmp/monitor_vps.sh << 'EOF'
-        #!/bin/bash
-        while true; do
-          echo "[$(date)] VPS running - Tailscale: $(tailscale ip -4 2>/dev/null || echo 'disconnected')"
-          sleep 300
-        done
-        EOF
+        echo "VPS is running with tmate and Tailscale..."
+        echo "Session will auto-reconnect every 6 hours"
         
-        chmod +x /tmp/monitor_vps.sh
-        nohup /tmp/monitor_vps.sh > /tmp/vps_monitor.log 2>&1 &
+        # Wait for the session to complete
+        sleep 21600
         
     - name: Backup VPS data and tailscale state
       run: |
-        echo "Creating backup..."
+        echo "Creating backup before shutdown..."
         sudo mkdir -p /opt/vps-backup/data
         sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ 2>/dev/null || echo "No tailscale state found"
         sudo chown -R $USER:$USER /opt/vps-backup
@@ -136,18 +126,6 @@ jobs:
       with:
         name: vps-backup
         path: backup.zip
-        
-    - name: Keep workflow running
-      run: |
-        echo "✅ VPS is running with Tailscale and tmux session"
-        echo "💻 Connect using Tailscale IP: $(tailscale ip -4)"
-        echo "📋 Access tmux session: tmux attach -t vps-session"
-        echo ""
-        echo "The VPS will remain active for 350 minutes (6 hours)"
-        echo "Monitoring is running in background..."
-        
-        # Wait for the timeout or manual cancellation
-        sleep 21000  # 350 minutes
 
 # Username = incre
 # Pass = Incre.com
