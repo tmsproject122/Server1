@@ -68,65 +68,24 @@ jobs:
         sleep 8
         sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=root@incre || echo "Tailscale already up"
         
-    - name: Start tmate and get connection info
-      id: tmate
+    - name: Start tmate session
+      uses: mxschmitt/action-tmate@v3
+      
+    - name: Show Tailscale IP and tmate info
       run: |
-        # Generate a unique session name
-        SESSION_NAME="vps-$(date +%s)"
-        
-        # Start tmate and capture connection info
-        tmate -S /tmp/tmate.sock new-session -d -s $SESSION_NAME
-        tmate -S /tmp/tmate.sock wait tmate-ready
-        
-        # Get connection strings
-        TMATE_SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-        TMATE_WEB=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
-        
-        # Save to files and output
-        echo "$TMATE_SSH" > /tmp/tmate_ssh
-        echo "$TMATE_WEB" > /tmp/tmate_web
-        
-        echo "TMATE_SSH=$TMATE_SSH" >> $GITHUB_OUTPUT
-        echo "TMATE_WEB=$TMATE_WEB" >> $GITHUB_OUTPUT
-        
-        echo "🔗 tmate SSH: $TMATE_SSH"
-        echo "🌐 tmate Web: $TMATE_WEB"
-        
-        # Keep tmate alive with a simple command running in the session
-        tmate -S /tmp/tmate.sock send-keys -t $SESSION_NAME "echo 'Tmate session active - VPS is ready for connections'" Enter
-        
-    - name: Show connection information
-      run: |
-        echo "=============================================="
-        echo "🚀 VPS READY FOR CONNECTIONS"
-        echo "=============================================="
-        echo "SSH Command: ${{ steps.tmate.outputs.TMATE_SSH }}"
-        echo "Web Interface: ${{ steps.tmate.outputs.TMATE_WEB }}"
-        echo ""
         echo "🔗 Tailscale IP:"
         tailscale ip -4 || echo "Tailscale IP not found"
-        echo "=============================================="
+        echo ""
+        echo "🔑 tmate SSH session:"
+        cat $HOME/.tmate.sock/ssh
         
-    - name: Setup background keep-alive
-      run: |
-        # Create a script to keep tmate session active
-        cat > /tmp/keepalive.sh << 'EOF'
-        #!/bin/bash
-        while true; do
-          # Send a simple command every minute to keep session active
-          tmate -S /tmp/tmate.sock send-keys -t 0 "echo 'Session keep-alive: $(date)'" Enter
-          sleep 60
-        done
-        EOF
-        
-        chmod +x /tmp/keepalive.sh
-        nohup /tmp/keepalive.sh > /tmp/keepalive.log 2>&1 &
-        
+    - name: Sleep to keep VPS alive
+      run: sleep 21600
+      
     - name: Backup VPS data and tailscale state
       run: |
-        echo "Creating backup..."
         sudo mkdir -p /opt/vps-backup/data
-        sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ 2>/dev/null || echo "No tailscale state found"
+        sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/
         sudo chown -R $USER:$USER /opt/vps-backup
         zip -r backup.zip /opt/vps-backup
         
@@ -135,22 +94,6 @@ jobs:
       with:
         name: vps-backup
         path: backup.zip
-        
-    - name: Keep workflow running with active tmate session
-      run: |
-        echo "✅ VPS is running with active tmate session"
-        echo "💻 Connect using: ${{ steps.tmate.outputs.TMATE_SSH }}"
-        echo "🌐 Or visit: ${{ steps.tmate.outputs.TMATE_WEB }}"
-        echo ""
-        echo "The workflow will now wait while keeping the session active..."
-        echo "Press Ctrl+C in your tmate session to disconnect"
-        echo "The VPS will automatically reconnect every 6 hours"
-        
-        # Wait indefinitely but allow background processes to run
-        while true; do
-          sleep 300
-          echo "🔄 VPS session still active - $(date)"
-        done
 
 # Username = incre
 # Pass = Incre.com
