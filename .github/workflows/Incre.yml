@@ -40,7 +40,7 @@ jobs:
     - name: Install prerequisites
       run: |
         sudo apt update
-        sudo apt install -y tmate curl unzip sudo net-tools neofetch
+        sudo apt install -y tmux curl unzip sudo net-tools neofetch openssh-server
         
     - name: Install Tailscale
       run: |
@@ -68,36 +68,60 @@ jobs:
         sleep 8
         sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=root@incre || echo "Tailscale already up"
         
-    - name: Start tmate session in background
+    - name: Setup SSH access
       run: |
-        # Start tmate in the background and capture connection info
-        tmate -S /tmp/tmate.sock new-session -d
-        tmate -S /tmp/tmate.sock wait tmate-ready
-        tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' > /tmp/tmate_ssh
-        tmate -S /tmp/tmate.sock display -p '#{tmate_web}' > /tmp/tmate_web
+        # Install and configure SSH server
+        sudo apt install -y openssh-server
+        sudo systemctl start ssh
+        sudo systemctl enable ssh
         
-        # Display connection info
-        echo "🔗 tmate SSH: $(cat /tmp/tmate_ssh)"
-        echo "🌐 tmate Web: $(cat /tmp/tmate_web)"
+        # Get public IP (for information)
+        PUBLIC_IP=$(curl -s ifconfig.me || echo "unknown")
+        echo "Public IP: $PUBLIC_IP"
         
-        # Keep tmate running in background
-        sleep 10 &
-        
-    - name: Show Tailscale IP and tmate info
+    - name: Create persistent tmux session
       run: |
-        echo "🔗 Tailscale IP:"
+        # Create a named tmux session that persists
+        tmux new-session -d -s vps-session -c /home/incre
+        tmux send-keys -t vps-session "echo 'VPS Session Started - $(date)'" Enter
+        tmux send-keys -t vps-session "echo 'Tailscale IP:'" Enter
+        tmux send-keys -t vps-session "tailscale ip -4" Enter
+        tmux send-keys -t vps-session "echo ''" Enter
+        tmux send-keys -t vps-session "echo 'Use: tmux attach -t vps-session' to connect'" Enter
+        
+        echo "✅ tmux session created: vps-session"
+        
+    - name: Show connection information
+      run: |
+        echo "=============================================="
+        echo "🚀 VPS READY FOR CONNECTIONS"
+        echo "=============================================="
+        echo ""
+        echo "🔗 Tailscale IP (for direct access):"
         tailscale ip -4 || echo "Tailscale IP not found"
         echo ""
-        echo "🔑 tmate SSH session:"
-        cat /tmp/tmate_ssh || echo "tmate SSH info not available"
+        echo "💻 Connect via Tailscale:"
+        echo "  ssh incre@$(tailscale ip -4)"
         echo ""
-        echo "🌐 tmate Web session:"
-        cat /tmp/tmate_web || echo "tmate Web info not available"
+        echo "📋 To access the tmux session:"
+        echo "  tmux attach -t vps-session"
+        echo ""
+        echo "🔧 VPS will auto-reconnect every 6 hours"
+        echo "=============================================="
         
-    - name: Sleep to keep VPS alive (background)
+    - name: Setup auto-reconnect and monitoring
       run: |
-        # Sleep in background to allow other steps to run
-        sleep 21600 &
+        # Create monitoring script
+        cat > /tmp/monitor_vps.sh << 'EOF'
+        #!/bin/bash
+        while true; do
+          echo "[$(date)] VPS running - Tailscale: $(tailscale ip -4 2>/dev/null || echo 'disconnected')"
+          sleep 300
+        done
+        EOF
+        
+        chmod +x /tmp/monitor_vps.sh
+        nohup /tmp/monitor_vps.sh > /tmp/vps_monitor.log 2>&1 &
         
     - name: Backup VPS data and tailscale state
       run: |
@@ -115,12 +139,15 @@ jobs:
         
     - name: Keep workflow running
       run: |
-        echo "VPS is running with tmate session in background"
-        echo "Workflow will continue to execute other steps"
-        echo "Use the tmate connection info above to access your VPS"
+        echo "✅ VPS is running with Tailscale and tmux session"
+        echo "💻 Connect using Tailscale IP: $(tailscale ip -4)"
+        echo "📋 Access tmux session: tmux attach -t vps-session"
+        echo ""
+        echo "The VPS will remain active for 350 minutes (6 hours)"
+        echo "Monitoring is running in background..."
         
-        # Wait for background processes (tmate and sleep)
-        wait
+        # Wait for the timeout or manual cancellation
+        sleep 21000  # 350 minutes
 
 # Username = incre
 # Pass = Incre.com
